@@ -29,6 +29,7 @@ public static class CliApplication
         where TConfigSaveCommand : class, ICommandLimiter<ConfigSaveSettings>
     {
         config.SetApplicationName("ddns");
+        config.SetApplicationVersion("1.0.0");
         config.Settings.StrictParsing = true;
 
         config.AddCommand<TLoginCommand>("login")
