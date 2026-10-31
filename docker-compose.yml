@@ -5,7 +5,9 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    #user: "${PUID:-1000}:${PGID:-1000}"
+    # Run as the host user so the bind-mounted ./config stays writable.
+    # Set PUID/PGID in .env if your uid/gid is not 1000.
+    user: "${PUID:-1000}:${PGID:-1000}"
     environment:
       DDNS_CONFIG_PATH: /config/ddns.json
       DDNS_SECRET: ${DDNS_SECRET:-}

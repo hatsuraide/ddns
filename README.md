@@ -199,7 +199,16 @@ to the `DDNS_*` equivalents when migrating an existing deployment.
 ```bash
 cp .env.example .env
 # set DDNS_SECRET in .env
+# set PUID/PGID to your host ids (`id -u` / `id -g`) so ./config is writable
 docker compose up -d
+```
+
+The container runs as `PUID:PGID` (default `1000:1000`). If the mounted
+`./config` directory belongs to another user you will get a permission error when
+saving; either set `PUID`/`PGID` in `.env` or fix ownership:
+
+```bash
+sudo chown -R "$(id -u):$(id -g)" ./config
 ```
 
 One-off commands:
