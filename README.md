@@ -224,9 +224,6 @@ Legacy configs are converted to `accounts[].records` in memory. Save them once
 Encrypted `mittwald-ddns.encrypted-config` files are still readable; new files
 use the `ddns.encrypted-config` envelope.
 
-The original Python script is kept in [`legacy/dyndns.py`](legacy/dyndns.py) for
-reference; it is no longer needed and is not part of the build.
-
 ## Architecture
 
 ```
