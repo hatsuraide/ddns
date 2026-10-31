@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -103,47 +102,12 @@ public sealed class ConfigStore
         var directory = Path.GetDirectoryName(path);
         if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
 
-        var targetDirectory = string.IsNullOrWhiteSpace(directory)
-            ? Directory.GetCurrentDirectory()
-            : directory;
-
         var tempPath = Path.Combine(
-            targetDirectory,
+            string.IsNullOrWhiteSpace(directory) ? Directory.GetCurrentDirectory() : directory,
             $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
 
-        try
-        {
-            File.WriteAllText(tempPath, text);
-            File.Move(tempPath, path, true);
-        }
-        catch (UnauthorizedAccessException exception)
-        {
-            throw new UnauthorizedAccessException(DescribePermissionFailure(path, targetDirectory), exception);
-        }
-    }
-
-    internal static string DescribePermissionFailure(string path, string directory)
-    {
-        return $"Cannot write '{path}': permission denied for directory '{directory}' " +
-               $"(running as {DescribeCurrentUser()}). " +
-               "In Docker the container user must own or be able to write the mounted config directory: " +
-               "set PUID/PGID in .env to your host user ids, or run the container with " +
-               "--user \"$(id -u):$(id -g)\". On the host, fix the ownership with " +
-               $"sudo chown -R \"$(id -u):$(id -g)\" '{directory}'.";
-    }
-
-    private static string DescribeCurrentUser()
-    {
-        if (OperatingSystem.IsWindows()) return $"'{Environment.UserName}'";
-
-        try
-        {
-            return $"'{Environment.UserName}' (uid {GetEffectiveUserId()})";
-        }
-        catch
-        {
-            return $"'{Environment.UserName}'";
-        }
+        File.WriteAllText(tempPath, text);
+        File.Move(tempPath, path, true);
     }
 
     public static string ExpandPath(string path)
@@ -244,9 +208,6 @@ public sealed class ConfigStore
     {
         return SHA256.HashData(Encoding.UTF8.GetBytes(secret));
     }
-
-    [DllImport("libc", EntryPoint = "geteuid")]
-    private static extern uint GetEffectiveUserId();
 }
 
 public sealed record LoadedConfig(ConfigModel Config, ConfigFileFormat Format);
