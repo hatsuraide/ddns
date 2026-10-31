@@ -190,7 +190,9 @@ and when the public IP cannot be resolved. Unchanged records do not notify.
 | `DDNS_CONFIG_PATH` | Config file path. Default `~/.config/ddns.json`. |
 | `DDNS_SECRET` | Passphrase for encrypted config files (SHA-256 → AES-256-GCM). |
 | `DDNS_IP_SERVICE_URL` | Overrides `ip_service_url`. |
-| `MITTWALD_CONFIG_PATH`, `MITTWALD_SECRET`, `MITTWALD_IP_SERVICE_URL` | Legacy fallbacks, still honoured. |
+
+The `MITTWALD_*` variables from mittwald-ddns are no longer read; rename them
+to the `DDNS_*` equivalents when migrating an existing deployment.
 
 ## Docker
 
