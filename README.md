@@ -17,7 +17,7 @@ and now speaks multiple providers, currently **mittwald** (API v1 and v2) and
 - Webhook notifications on IP changes and failures (Discord-compatible payload).
 - IPv4 and IPv6, depending on the IP service you configure.
 - Automatic import of existing `mittwald-ddns` and `dyndns.py` config files.
-- Docker image, single-file binaries, tests.
+- Docker image, single-file binaries for x64 and arm64, tests.
 
 ## Requirements
 
@@ -208,7 +208,11 @@ docker compose run --rm ddns check
 docker compose run --rm ddns config export
 ```
 
-The image is published as `ghcr.io/hatsuraide/ddns`.
+The image is published as `ghcr.io/hatsuraide/ddns` as a multi-arch manifest for
+`linux/amd64` and `linux/arm64` (Raspberry Pi, ARM servers).
+
+Release assets: `ddns-linux-x64`, `ddns-linux-arm64`, `ddns-win-x64.exe`,
+`ddns-win-arm64.exe` — all self-contained single-file binaries.
 
 ## Migrating from mittwald-ddns / dyndns.py
 

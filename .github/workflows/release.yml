@@ -22,10 +22,18 @@ jobs:
             rid: linux-x64
             executable: ddns
             asset: ddns-linux-x64
+          - os: ubuntu-latest
+            rid: linux-arm64
+            executable: ddns
+            asset: ddns-linux-arm64
           - os: windows-latest
             rid: win-x64
             executable: ddns.exe
             asset: ddns-win-x64.exe
+          - os: windows-latest
+            rid: win-arm64
+            executable: ddns.exe
+            asset: ddns-win-arm64.exe
 
     steps:
       - name: Checkout
@@ -84,6 +92,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -123,5 +136,6 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.image.outputs.tags }}

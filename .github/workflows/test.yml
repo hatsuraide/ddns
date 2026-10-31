@@ -20,6 +20,7 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
+          - ubuntu-24.04-arm
           - windows-latest
 
     steps:
@@ -40,6 +41,35 @@ jobs:
       - name: Test
         run: dotnet test Ddns.slnx --configuration Release --no-build --verbosity normal
 
+  arm64-publish:
+    name: Single-file publish (linux-arm64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish linux-arm64
+        run: |
+          dotnet publish Ddns/Ddns.csproj \
+            --configuration Release \
+            --runtime linux-arm64 \
+            --self-contained true \
+            --output dist/linux-arm64 \
+            -p:PublishSingleFile=true \
+            -p:DebugType=None \
+            -p:DebugSymbols=false
+
+      - name: Verify architecture
+        run: |
+          file dist/linux-arm64/ddns
+          file dist/linux-arm64/ddns | grep -q 'ARM aarch64'
+
   docker:
     name: Docker build
     runs-on: ubuntu-latest
@@ -56,5 +86,6 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          platforms: linux/amd64
           push: false
           tags: ddns:test
