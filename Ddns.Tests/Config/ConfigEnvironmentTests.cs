@@ -2,6 +2,7 @@ using Ddns.Config;
 
 namespace Ddns.Tests.Config;
 
+[Collection(EnvironmentCollection.Name)]
 public sealed class ConfigEnvironmentTests
 {
     [Fact]

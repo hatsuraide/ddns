@@ -82,12 +82,31 @@ public sealed class ConfigSaveCommand : Command<ConfigSaveSettings>
             var imported = ConfigStore.LoadFromFile(settings.File!, ConfigEnvironment.Secret);
             ConfigValidator.ThrowIfInvalid(imported.Config);
 
-            if (imported.Format == ConfigFileFormat.Encrypted && !store.CanEncrypt)
+            if (settings.Plain && imported.Format == ConfigFileFormat.Encrypted)
                 throw new InvalidOperationException(
-                    "DDNS_SECRET is required to save an encrypted config file.");
+                    "Refusing to write an encrypted config as plain text. " +
+                    "Use 'config export --file' if you need a plain copy.");
 
-            store.Save(imported.Config, imported.Format);
-            CliConsole.Error.MarkupLineInterpolated($"Saved {store.ConfigPath}");
+            // Encrypt whenever a secret is available, even if the imported file
+            // was plain JSON. The source format only describes the input.
+            var format = store.CanEncrypt && !settings.Plain
+                ? ConfigFileFormat.Encrypted
+                : ConfigFileFormat.Plain;
+
+            store.Save(imported.Config, format);
+
+            if (format == ConfigFileFormat.Encrypted)
+            {
+                CliConsole.Error.MarkupLineInterpolated($"Saved encrypted config to {store.ConfigPath}");
+            }
+            else
+            {
+                CliConsole.Error.MarkupLineInterpolated($"Saved plain JSON config to {store.ConfigPath}");
+                CliConsole.Error.MarkupLine(
+                    "[yellow]Warning: API keys and webhook URLs are stored in plain text. " +
+                    "Set DDNS_SECRET and save again to encrypt them.[/]");
+            }
+
             return 0;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -110,4 +129,7 @@ public sealed class ConfigExportSettings : CommandSettings
 public sealed class ConfigSaveSettings : CommandSettings
 {
     [CommandOption("--file <FILE>")] public string? File { get; init; }
+
+    /// <summary>Write plain JSON even when DDNS_SECRET is set.</summary>
+    [CommandOption("--plain")] public bool Plain { get; init; }
 }

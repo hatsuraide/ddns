@@ -53,6 +53,10 @@ dotnet run --project Ddns --
 `DDNS_SECRET` is only needed for encrypted config files. Without it, the
 interactive workspace can save plain JSON (it asks first).
 
+`config save` encrypts whenever `DDNS_SECRET` is set, regardless of whether the
+imported file was plain JSON. Without a secret it writes plain JSON and prints a
+warning; `--plain` forces plain output even when a secret is configured.
+
 ## Commands
 
 | Command | Description |
@@ -61,7 +65,7 @@ interactive workspace can save plain JSON (it asks first).
 | `ddns check` | Resolve the public IP and update all records once. |
 | `ddns config` | Open the interactive config workspace. |
 | `ddns config export [--file config.json]` | Print or write the effective config as plain JSON. |
-| `ddns config save --file config.json` | Import a config file (migrates legacy formats). |
+| `ddns config save --file config.json [--plain]` | Import a config file (migrates legacy formats). |
 | `ddns login [--v1 --username USER \| --v2 --email EMAIL]` | Create a mittwald API key. |
 
 ## Interactive config (TUI)
