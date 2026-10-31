@@ -64,6 +64,28 @@ interactive workspace can save plain JSON (it asks first).
 | `ddns config save --file config.json` | Import a config file (migrates legacy formats). |
 | `ddns login [--v1 --username USER \| --v2 --email EMAIL]` | Create a mittwald API key. |
 
+## Interactive config (TUI)
+
+`ddns config` opens a boxed terminal menu in the style of
+[hatsuraide/LSAC](https://github.com/hatsuraide/LSAC): alternate screen buffer,
+single-key navigation, a scrolling list and a hint bar.
+
+| Key | Action |
+| --- | --- |
+| `↑` / `↓`, `j` / `k` | Move |
+| `PageUp` / `PageDown`, `Home` / `End` | Jump |
+| `Enter` | Select (or confirm a multi-select) |
+| `Space` | Toggle a row in record discovery |
+| `Esc` / `Backspace` | Back (or cancel) |
+| `q` | Quit from the main menu |
+
+Menus stay in the alternate screen; text prompts, secret input and confirmations
+temporarily drop back to the normal screen. Errors and save confirmations appear
+as centered message boxes.
+
+When stdout is redirected (CI, cron, `docker compose run` without a TTY) the
+workspace falls back to plain Spectre.Console prompts, so it stays scriptable.
+
 ## Configuration
 
 Default location: `~/.config/ddns.json` (`/config/ddns.json` in the container).
@@ -216,7 +238,10 @@ Ddns/
 │   └── CloudflareProvider.cs
 ├── Notifications/   WebhookNotifier
 ├── Daemon/          Worker (loop + config hot reload)
-└── Cli/             commands and interactive config workspace
+└── Cli/             commands, interactive workspace and the TUI
+    ├── Commands/
+    ├── Interactive/ config workspace menus
+    └── Tui/         LSAC-style renderer and key handling (unit tested)
 ```
 
 The worker only knows two things: how to get the public IP and how to ask the
@@ -241,7 +266,7 @@ dotnet test Ddns.slnx
 ```
 
 Tests mirror the source layout:
-
+menu helpers and TUI renderer/session
 ```
 Ddns.Tests/
 ├── Cli/         command routing, prompts and validators

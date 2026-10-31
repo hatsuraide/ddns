@@ -1,16 +1,31 @@
 using Ddns.Cli.Interactive;
+using Ddns.Cli.Tui;
 
 namespace Ddns.Tests.Cli;
 
 public sealed class MenuHelperTests
 {
     [Fact]
-    public void MenuOption_KeepsValueIndependentFromDisplayLabel()
+    public void MenuChoice_KeepsValueIndependentFromDisplayLabel()
     {
-        var option = new MenuOption<MainMenuAction>(MainMenuAction.Save, "Persist configuration");
+        var choice = new MenuChoice<MainMenuAction>(MainMenuAction.Save, "Persist configuration");
 
-        Assert.Equal(MainMenuAction.Save, option.Value);
-        Assert.Equal("Persist configuration", option.ToString());
+        Assert.Equal(MainMenuAction.Save, choice.Value);
+        Assert.Equal("Persist configuration", choice.ToString());
+        Assert.Equal("Persist configuration", choice.ToItem().Label);
+    }
+
+    [Fact]
+    public void MenuChoice_RendersDescriptionAndSubmenuMarker()
+    {
+        var choice = new MenuChoice<MainMenuAction>(
+            MainMenuAction.Accounts, "Accounts", "2 accounts", IsSubmenu: true);
+
+        Assert.Equal("Accounts - 2 accounts", choice.ToString());
+
+        var item = choice.ToItem();
+        Assert.Equal("2 accounts", item.Description);
+        Assert.True(item.IsSubmenu);
     }
 
     [Theory]

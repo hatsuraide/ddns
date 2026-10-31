@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using Ddns.Cli.Tui;
 using Ddns.Config;
 using Ddns.Core;
 using Spectre.Console;
@@ -11,12 +12,23 @@ public sealed class ConfigWorkspace
     private readonly IAnsiConsole _console;
     private readonly ProviderRegistry _providerRegistry;
     private readonly ConfigStore _store;
+    private readonly TuiSession _tui;
 
     public ConfigWorkspace(ConfigStore store, ProviderRegistry providerRegistry, IAnsiConsole console)
+        : this(store, providerRegistry, console, new TuiSession(Console.Out, TuiSession.IsTerminalAvailable()))
+    {
+    }
+
+    internal ConfigWorkspace(
+        ConfigStore store,
+        ProviderRegistry providerRegistry,
+        IAnsiConsole console,
+        TuiSession tui)
     {
         _store = store;
         _providerRegistry = providerRegistry;
         _console = console;
+        _tui = tui;
     }
 
     public async Task<int> RunAsync(CancellationToken cancellationToken = default)
@@ -24,127 +36,167 @@ public sealed class ConfigWorkspace
         var config = _store.Load() ?? new ConfigModel();
         var dirty = false;
 
-        while (true)
+        ConsoleCancelEventHandler? cancelHandler = null;
+        if (_tui.Enabled)
         {
-            _console.WriteLine();
-            WriteSummary(config, dirty);
-
-            switch (PromptMainMenu(config))
+            cancelHandler = (_, e) =>
             {
-                case MainMenuAction.AddAccount:
-                {
-                    dirty = await AddAccountAsync(config, cancellationToken) || dirty;
-                    break;
-                }
-                case MainMenuAction.ImportPlainJson:
-                {
-                    var imported = ImportPlainJson();
-                    if (imported is not null)
-                    {
-                        config = imported;
-                        dirty = true;
-                    }
+                e.Cancel = true;
+                _tui.Dispose();
+                Environment.Exit(130);
+            };
+            Console.CancelKeyPress += cancelHandler;
+        }
 
-                    break;
-                }
-                case MainMenuAction.Accounts:
+        _tui.EnterAlternateScreen();
+        try
+        {
+            while (true)
+            {
+                if (!_tui.IsActive)
                 {
-                    dirty = await RunAccountsMenuAsync(config, cancellationToken) || dirty;
-                    break;
+                    _console.WriteLine();
+                    WriteSummary(config, dirty);
                 }
-                case MainMenuAction.GlobalSettings:
+
+                if (!PromptMainMenu(config, dirty, out var action)) return 0;
+
+                switch (action)
                 {
-                    dirty = RunGlobalSettings(config) || dirty;
-                    break;
-                }
-                case MainMenuAction.ReviewEffectiveConfig:
-                {
-                    WriteEffectiveConfig(config);
-                    PromptToContinue();
-                    break;
-                }
-                case MainMenuAction.ExportPlainJson:
-                {
-                    ExportPlainJsonFromWorkspace(config);
-                    break;
-                }
-                case MainMenuAction.Save:
-                {
-                    if (Save(config)) dirty = false;
-                    break;
-                }
-                case MainMenuAction.Exit:
-                case MainMenuAction.ExitWithoutSaving:
-                {
-                    if (!dirty || _console.Confirm("Exit without saving changes?", false)) return 0;
-                    break;
+                    case MainMenuAction.AddAccount:
+                    {
+                        dirty = await AddAccountAsync(config, cancellationToken) || dirty;
+                        break;
+                    }
+                    case MainMenuAction.ImportPlainJson:
+                    {
+                        var imported = ImportPlainJson();
+                        if (imported is not null)
+                        {
+                            config = imported;
+                            dirty = true;
+                        }
+
+                        break;
+                    }
+                    case MainMenuAction.Accounts:
+                    {
+                        dirty = await RunAccountsMenuAsync(config, cancellationToken) || dirty;
+                        break;
+                    }
+                    case MainMenuAction.GlobalSettings:
+                    {
+                        dirty = RunGlobalSettings(config) || dirty;
+                        break;
+                    }
+                    case MainMenuAction.ReviewEffectiveConfig:
+                    {
+                        WriteEffectiveConfig(config);
+                        break;
+                    }
+                    case MainMenuAction.ExportPlainJson:
+                    {
+                        ExportPlainJsonFromWorkspace(config);
+                        break;
+                    }
+                    case MainMenuAction.Save:
+                    {
+                        if (Save(config)) dirty = false;
+                        break;
+                    }
+                    case MainMenuAction.Exit:
+                    case MainMenuAction.ExitWithoutSaving:
+                    {
+                        if (!dirty || Confirm("Exit without saving changes?")) return 0;
+                        break;
+                    }
                 }
             }
         }
+        finally
+        {
+            if (cancelHandler is not null) Console.CancelKeyPress -= cancelHandler;
+            _tui.Dispose();
+        }
     }
 
-    private MainMenuAction PromptMainMenu(ConfigModel config)
+    private bool PromptMainMenu(ConfigModel config, bool dirty, out MainMenuAction action)
     {
-        var choices = config.Accounts.Count == 0
-            ? new[]
-            {
-                MainMenuAction.AddAccount,
-                MainMenuAction.ImportPlainJson,
-                MainMenuAction.GlobalSettings,
-                MainMenuAction.Exit
-            }
-            : new[]
-            {
-                MainMenuAction.Accounts,
-                MainMenuAction.GlobalSettings,
-                MainMenuAction.ReviewEffectiveConfig,
-                MainMenuAction.ExportPlainJson,
-                MainMenuAction.Save,
-                MainMenuAction.ExitWithoutSaving
-            };
+        var recordCount = config.Accounts.Sum(account => account.Records.Count);
+        var choices = new List<MenuChoice<MainMenuAction>>();
 
-        return _console.Prompt(
-            new SelectionPrompt<MainMenuAction>()
-                .Title("Action")
-                .AddChoices(choices)
-                .UseConverter(PromptLabels.MainMenuLabel));
+        if (config.Accounts.Count == 0)
+        {
+            choices.Add(new MenuChoice<MainMenuAction>(
+                MainMenuAction.AddAccount, "Add provider account", "mittwald or Cloudflare"));
+            choices.Add(new MenuChoice<MainMenuAction>(MainMenuAction.ImportPlainJson, "Import plain JSON"));
+            choices.Add(new MenuChoice<MainMenuAction>(
+                MainMenuAction.GlobalSettings, "Global settings", config.Timeout.ToString(), IsSubmenu: true));
+            choices.Add(new MenuChoice<MainMenuAction>(MainMenuAction.Exit, "Exit"));
+        }
+        else
+        {
+            choices.Add(new MenuChoice<MainMenuAction>(
+                MainMenuAction.Accounts,
+                "Accounts",
+                $"{config.Accounts.Count} accounts, {recordCount} records",
+                IsSubmenu: true));
+            choices.Add(new MenuChoice<MainMenuAction>(
+                MainMenuAction.GlobalSettings,
+                "Global settings",
+                $"every {config.Timeout}",
+                IsSubmenu: true));
+            choices.Add(new MenuChoice<MainMenuAction>(
+                MainMenuAction.ReviewEffectiveConfig, "Review effective config"));
+            choices.Add(new MenuChoice<MainMenuAction>(MainMenuAction.ExportPlainJson, "Export plain JSON"));
+            choices.Add(new MenuChoice<MainMenuAction>(
+                MainMenuAction.Save,
+                "Save",
+                dirty ? "unsaved changes" : "no pending changes"));
+            choices.Add(new MenuChoice<MainMenuAction>(
+                MainMenuAction.ExitWithoutSaving, "Exit without saving"));
+        }
+
+        if (Choose("DDNS Config", choices, isRoot: true, out action)) return true;
+
+        action = MainMenuAction.ExitWithoutSaving;
+        return false;
     }
 
     private async Task<bool> RunAccountsMenuAsync(ConfigModel config, CancellationToken cancellationToken)
     {
         while (true)
         {
-            _console.WriteLine();
-            _console.MarkupLine("[bold]Accounts[/]");
+            if (!_tui.IsActive) _console.MarkupLine("[bold]Accounts[/]");
 
-            var choices = new List<MenuOption<AccountMenuSelection>>
+            var choices = new List<MenuChoice<AccountMenuSelection>>
             {
-                new(new AccountMenuSelection(AccountMenuAction.AddAccount),
+                new(
+                    new AccountMenuSelection(AccountMenuAction.AddAccount),
                     PromptLabels.AccountMenuLabel(AccountMenuAction.AddAccount))
             };
             choices.AddRange(config.Accounts.Select(account =>
-                new MenuOption<AccountMenuSelection>(
+                new MenuChoice<AccountMenuSelection>(
                     new AccountMenuSelection(AccountMenuAction.EditAccount, account),
-                    $"{account.Name} ({PromptLabels.ProviderLabel(account.Type)}, {account.Records.Count} records)")));
-            choices.Add(new MenuOption<AccountMenuSelection>(
+                    account.Name,
+                    $"{PromptLabels.ProviderLabel(account.Type)} · {account.Records.Count} records",
+                    IsSubmenu: true)));
+            choices.Add(new MenuChoice<AccountMenuSelection>(
                 new AccountMenuSelection(AccountMenuAction.Back),
                 PromptLabels.AccountMenuLabel(AccountMenuAction.Back)));
 
-            var selected = _console.Prompt(
-                new SelectionPrompt<MenuOption<AccountMenuSelection>>()
-                    .Title("Account")
-                    .AddChoices(choices));
+            if (!Choose("Accounts", choices, isRoot: false, out var selected)) return false;
 
-            if (selected.Value.Action == AccountMenuAction.AddAccount)
+            if (selected.Action == AccountMenuAction.AddAccount)
             {
                 if (await AddAccountAsync(config, cancellationToken)) return true;
             }
-            else if (selected.Value.Action == AccountMenuAction.Back)
+            else if (selected.Action == AccountMenuAction.Back)
             {
                 return false;
             }
-            else if (selected.Value.Account is not null
-                     && await EditAccountAsync(config, selected.Value.Account, cancellationToken))
+            else if (selected.Account is not null
+                     && await EditAccountAsync(config, selected.Account, cancellationToken))
             {
                 return true;
             }
@@ -153,8 +205,11 @@ public sealed class ConfigWorkspace
 
     private async Task<bool> AddAccountAsync(ConfigModel config, CancellationToken cancellationToken)
     {
-        _console.WriteLine();
-        _console.MarkupLine("[bold]Add provider account[/]");
+        if (!_tui.IsActive)
+        {
+            _console.WriteLine();
+            _console.MarkupLine("[bold]Add provider account[/]");
+        }
 
         var type = PromptProviderType();
         var name = PromptRequired(type == ProviderTypes.Mittwald
@@ -164,7 +219,7 @@ public sealed class ConfigWorkspace
         if (config.Accounts.Any(account =>
                 string.Equals(account.Name, name, StringComparison.OrdinalIgnoreCase)))
         {
-            _console.MarkupLine("[red]Account name must be unique.[/]");
+            Notify("Account name must be unique.", error: true);
             return false;
         }
 
@@ -185,7 +240,7 @@ public sealed class ConfigWorkspace
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            _console.WriteLine($"Cannot create provider: {exception.Message}");
+            Notify($"Cannot create provider: {exception.Message}", error: true);
             return false;
         }
 
@@ -205,21 +260,19 @@ public sealed class ConfigWorkspace
     {
         while (true)
         {
-            _console.WriteLine();
-            WriteAccountSummary(config, account);
+            if (!_tui.IsActive) WriteAccountSummary(config, account);
 
-            var selected = _console.Prompt(
-                new SelectionPrompt<AccountEditAction>()
-                    .Title("Account action")
-                    .AddChoices(
-                        AccountEditAction.ReplaceApiKey,
-                        AccountEditAction.RenameAccount,
-                        AccountEditAction.SetApiVersionOverride,
-                        AccountEditAction.SetWebhookOverride,
-                        AccountEditAction.ManageRecords,
-                        AccountEditAction.RemoveAccount,
-                        AccountEditAction.Back)
-                    .UseConverter(PromptLabels.AccountEditLabel));
+            var choices = Enum.GetValues<AccountEditAction>()
+                .Select(action => new MenuChoice<AccountEditAction>(
+                    action,
+                    PromptLabels.AccountEditLabel(action),
+                    action == AccountEditAction.ManageRecords
+                        ? $"{account.Records.Count} records"
+                        : null,
+                    IsSubmenu: action == AccountEditAction.ManageRecords))
+                .ToList();
+
+            if (!Choose($"Account: {account.Name}", choices, isRoot: false, out var selected)) return false;
 
             switch (selected)
             {
@@ -240,7 +293,7 @@ public sealed class ConfigWorkspace
 
                     break;
                 case AccountEditAction.RemoveAccount:
-                    if (_console.Confirm($"Remove account '{Markup.Escape(account.Name)}' and all records?", false))
+                    if (Confirm($"Remove account '{account.Name}' and all records?"))
                     {
                         config.Accounts.Remove(account);
                         return true;
@@ -276,16 +329,16 @@ public sealed class ConfigWorkspace
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            _console.WriteLine($"Cannot create provider: {exception.Message}");
+            Notify($"Cannot create provider: {exception.Message}", error: true);
             return false;
         }
 
         if (!await ValidateCredentialsAsync(config, provider, draft, cancellationToken)) return false;
 
         account.ApiKey = apiKey;
-        _console.MarkupLine("[green]API key replaced and validated.[/]");
+        Notify("API key replaced and validated.");
 
-        if (_console.Confirm("Rediscover records now?", false))
+        if (Confirm("Rediscover records now?"))
             account.Records = (await DiscoverWithFallbackAsync(provider, account, account.Records, cancellationToken))
                 .ToList();
 
@@ -299,7 +352,7 @@ public sealed class ConfigWorkspace
                 !ReferenceEquals(candidate, account)
                 && string.Equals(candidate.Name, newName, StringComparison.OrdinalIgnoreCase)))
         {
-            _console.MarkupLine("[red]Account name must be unique.[/]");
+            Notify("Account name must be unique.", error: true);
             return false;
         }
 
@@ -314,20 +367,21 @@ public sealed class ConfigWorkspace
     {
         while (true)
         {
-            _console.WriteLine();
-            _console.WriteLine($"Records for account: {account.Name}");
-            WriteRecords(account.Records);
+            if (!_tui.IsActive)
+            {
+                _console.WriteLine();
+                _console.WriteLine($"Records for account: {account.Name}");
+                WriteRecords(account.Records);
+            }
 
-            var selected = _console.Prompt(
-                new SelectionPrompt<RecordMenuAction>()
-                    .Title("Record action")
-                    .AddChoices(
-                        RecordMenuAction.DiscoverFromProvider,
-                        RecordMenuAction.AddManually,
-                        RecordMenuAction.EditRecord,
-                        RecordMenuAction.RemoveRecord,
-                        RecordMenuAction.Back)
-                    .UseConverter(PromptLabels.RecordMenuLabel));
+            var choices = Enum.GetValues<RecordMenuAction>()
+                .Select(action => new MenuChoice<RecordMenuAction>(
+                    action,
+                    PromptLabels.RecordMenuLabel(action),
+                    IsSubmenu: false))
+                .ToList();
+
+            if (!Choose($"Records: {account.Name}", choices, isRoot: false, out var selected)) return false;
 
             switch (selected)
             {
@@ -340,7 +394,7 @@ public sealed class ConfigWorkspace
                     }
                     catch (Exception exception) when (exception is not OperationCanceledException)
                     {
-                        _console.WriteLine($"Cannot create provider: {exception.Message}");
+                        Notify($"Cannot create provider: {exception.Message}", error: true);
                         return false;
                     }
 
@@ -364,8 +418,11 @@ public sealed class ConfigWorkspace
 
     private ConfigRecord ReadManualRecord(string providerType)
     {
-        _console.MarkupLine("[bold]Manual record add[/]");
-        _console.MarkupLine("The record will be accepted without a live provider lookup.");
+        if (!_tui.IsActive)
+        {
+            _console.MarkupLine("[bold]Manual record add[/]");
+            _console.MarkupLine("The record will be accepted without a live provider lookup.");
+        }
 
         var record = new ConfigRecord
         {
@@ -390,7 +447,7 @@ public sealed class ConfigWorkspace
     {
         if (account.Records.Count == 0)
         {
-            _console.MarkupLine("[yellow]No records configured.[/]");
+            Notify("No records configured.", error: true);
             return false;
         }
 
@@ -413,12 +470,12 @@ public sealed class ConfigWorkspace
     {
         if (account.Records.Count == 0)
         {
-            _console.MarkupLine("[yellow]No records configured.[/]");
+            Notify("No records configured.", error: true);
             return false;
         }
 
         var record = PromptRecord(account.Records, "Record to remove");
-        if (!_console.Confirm($"Remove record '{Markup.Escape(record.Domain)}'?", false)) return false;
+        if (!Confirm($"Remove record '{record.Domain}'?")) return false;
 
         account.Records.Remove(record);
         return true;
@@ -442,18 +499,19 @@ public sealed class ConfigWorkspace
                 && (account.ApiVersion ?? config.DefaultApiVersion) == 1
                 && exception.StatusCode == HttpStatusCode.Forbidden)
             {
-                _console.WriteLine(
+                Notify(
                     $"Mittwald API v1 authenticated the API key but denied access to account '{account.Name}'. " +
-                    "Enter the mittwald account name or numeric UID, not a local label or API-token UUID.");
+                    "Enter the mittwald account name or numeric UID, not a local label or API-token UUID.",
+                    error: true);
 
-                if (!_console.Confirm("Retry with another v1 account identifier?", false)) return false;
+                if (!Confirm("Retry with another v1 account identifier?")) return false;
 
                 account.Name = PromptRequired("Mittwald account name or UID:");
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                _console.WriteLine($"Provider validation failed: {exception.Message}");
-                if (!_console.Confirm("Retry credential validation?", false)) return false;
+                Notify($"Provider validation failed: {exception.Message}", error: true);
+                if (!Confirm("Retry credential validation?")) return false;
 
                 account.ApiKey = PromptSecret("API key:");
             }
@@ -472,9 +530,8 @@ public sealed class ConfigWorkspace
             return SelectRecords(discovered, currentRecords);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            _console.WriteLine($"Record discovery failed: {exception.Message}");
-            if (_console.Confirm("Add a record manually?", false))
+        {Notify($"Record discovery failed: {exception.Message}", error: true);
+            if (Confirm("Add a record manually?"))
                 return [.. currentRecords ?? [], ReadManualRecord(account.Type)];
 
             return currentRecords?.ToList() ?? [];
@@ -487,7 +544,7 @@ public sealed class ConfigWorkspace
     {
         if (discovered.Count == 0)
         {
-            _console.MarkupLine("[yellow]No records found.[/]");
+            Notify("No records found.", error: true);
             return currentRecords?.ToList() ?? [];
         }
 
@@ -495,51 +552,68 @@ public sealed class ConfigWorkspace
             .GroupBy(record => record.Domain, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
-        var preselected = discovered
-            .Where(target => existingByDomain.Count == 0 || existingByDomain.ContainsKey(target.Domain))
+        var choices = discovered
+            .Select(target =>
+            {
+                var record = existingByDomain.TryGetValue(target.Domain, out var existing)
+                    ? existing
+                    : new ConfigRecord
+                    {
+                        Domain = target.Domain,
+                        ZoneId = target.ZoneId,
+                        RecordId = target.RecordId,
+                        ProjectId = target.ProjectId
+                    };
+
+                return new MenuChoice<ConfigRecord>(
+                    record,
+                    target.Domain,
+                    string.IsNullOrWhiteSpace(target.ZoneId) ? null : $"zone {target.ZoneId}");
+            })
             .ToList();
 
-        var prompt = new MultiSelectionPrompt<DiscoveredTarget>()
-            .Title("Select records to manage")
-            .NotRequired()
-            .InstructionsText("[grey](Press space to toggle, enter to accept)[/]")
-            .AddChoices(discovered)
-            .UseConverter(target => Markup.Escape(target.ToString()));
+        var preselected = choices
+            .Where(choice => existingByDomain.Count == 0 || existingByDomain.ContainsKey(choice.Value.Domain))
+            .Select(choice => choice.Value)
+            .ToList();
 
-        foreach (var target in preselected) prompt.Select(target);
-
-        var selected = _console.Prompt(prompt);
-
-        return selected.Select(target =>
-            existingByDomain.TryGetValue(target.Domain, out var existing)
-                ? existing
-                : new ConfigRecord
-                {
-                    Domain = target.Domain,
-                    ZoneId = target.ZoneId,
-                    RecordId = target.RecordId,
-                    ProjectId = target.ProjectId
-                }).ToList();
+        var selected = ChooseMany("Select records to manage", choices, preselected);
+        return selected?.ToList() ?? currentRecords?.ToList() ?? [];
     }
 
     private bool RunGlobalSettings(ConfigModel config)
     {
-        _console.WriteLine();
-        WriteGlobalSettings(config);
+        if (!_tui.IsActive)
+        {
+            _console.WriteLine();
+            WriteGlobalSettings(config);
+        }
 
-        var selected = _console.Prompt(
-            new SelectionPrompt<GlobalSettingsAction>()
-                .Title("Global setting")
-                .AddChoices(
-                    GlobalSettingsAction.ChangeInterval,
-                    GlobalSettingsAction.ChangeDefaultApiVersion,
-                    GlobalSettingsAction.ChangeIpServiceUrl,
-                    GlobalSettingsAction.ChangeGlobalWebhook,
-                    GlobalSettingsAction.ClearGlobalWebhook,
-                    GlobalSettingsAction.ToggleChangeNotifications,
-                    GlobalSettingsAction.ToggleErrorNotifications,
-                    GlobalSettingsAction.Back)
-                .UseConverter(PromptLabels.GlobalSettingsLabel));
+        var choices = new List<MenuChoice<GlobalSettingsAction>>
+        {
+            new(GlobalSettingsAction.ChangeInterval, PromptLabels.GlobalSettingsLabel(GlobalSettingsAction.ChangeInterval),
+                $"every {config.Timeout}"),
+            new(GlobalSettingsAction.ChangeDefaultApiVersion,
+                PromptLabels.GlobalSettingsLabel(GlobalSettingsAction.ChangeDefaultApiVersion),
+                $"v{config.DefaultApiVersion}"),
+            new(GlobalSettingsAction.ChangeIpServiceUrl,
+                PromptLabels.GlobalSettingsLabel(GlobalSettingsAction.ChangeIpServiceUrl),
+                config.IpServiceUrl),
+            new(GlobalSettingsAction.ChangeGlobalWebhook,
+                PromptLabels.GlobalSettingsLabel(GlobalSettingsAction.ChangeGlobalWebhook),
+                string.IsNullOrWhiteSpace(config.GlobalWebhook) ? "unset" : "configured"),
+            new(GlobalSettingsAction.ClearGlobalWebhook,
+                PromptLabels.GlobalSettingsLabel(GlobalSettingsAction.ClearGlobalWebhook)),
+            new(GlobalSettingsAction.ToggleChangeNotifications,
+                PromptLabels.GlobalSettingsLabel(GlobalSettingsAction.ToggleChangeNotifications),
+                config.NotifyOnChange ? "on" : "off"),
+            new(GlobalSettingsAction.ToggleErrorNotifications,
+                PromptLabels.GlobalSettingsLabel(GlobalSettingsAction.ToggleErrorNotifications),
+                config.NotifyOnError ? "on" : "off"),
+            new(GlobalSettingsAction.Back, PromptLabels.GlobalSettingsLabel(GlobalSettingsAction.Back))
+        };
+
+        if (!Choose("Global settings", choices, isRoot: false, out var selected)) return false;
 
         switch (selected)
         {
@@ -579,7 +653,7 @@ public sealed class ConfigWorkspace
         var loaded = ConfigStore.LoadFromFile(file, null);
         if (loaded.Format != ConfigFileFormat.Plain)
         {
-            _console.MarkupLine("[red]Interactive import expects plain JSON.[/]");
+            Notify("Interactive import expects plain JSON.", error: true);
             return null;
         }
 
@@ -595,17 +669,24 @@ public sealed class ConfigWorkspace
 
     private void ExportPlainJsonFromWorkspace(ConfigModel config)
     {
-        var selected = _console.Prompt(
-            new SelectionPrompt<ExportDestination>()
-                .Title("Export destination")
-                .AddChoices(ExportDestination.Stdout, ExportDestination.File, ExportDestination.Back)
-                .UseConverter(PromptLabels.ExportDestinationLabel));
+        var choices = new List<MenuChoice<ExportDestination>>
+        {
+            new(ExportDestination.Stdout, PromptLabels.ExportDestinationLabel(ExportDestination.Stdout)),
+            new(ExportDestination.File, PromptLabels.ExportDestinationLabel(ExportDestination.File)),
+            new(ExportDestination.Back, PromptLabels.ExportDestinationLabel(ExportDestination.Back))
+        };
+
+        if (!Choose("Export", choices, isRoot: false, out var selected)) return;
         if (selected == ExportDestination.Back) return;
 
         var json = JsonSerializer.Serialize(config, ConfigStore.JsonOptions);
         if (selected == ExportDestination.Stdout)
         {
-            Console.WriteLine(json);
+            WithConsole(() =>
+            {
+                Console.WriteLine(json);
+                return true;
+            });
             return;
         }
 
@@ -619,16 +700,14 @@ public sealed class ConfigWorkspace
         if (_store.CanEncrypt)
         {
             _store.SaveEncrypted(config);
-            _console.MarkupLine($"[green]Saved encrypted config to {Markup.Escape(_store.ConfigPath)}[/]");
+            Notify($"Saved encrypted config to {_store.ConfigPath}");
             return true;
         }
 
-        if (!_console.Confirm(
-                "DDNS_SECRET is not set. Save the config as plain JSON?", false))
-            return false;
+        if (!Confirm("DDNS_SECRET is not set. Save the config as plain JSON?")) return false;
 
         _store.SavePlain(config);
-        _console.MarkupLine($"[yellow]Saved plain JSON config to {Markup.Escape(_store.ConfigPath)}[/]");
+        Notify($"Saved plain JSON config to {_store.ConfigPath}");
         return true;
     }
 
@@ -726,55 +805,71 @@ public sealed class ConfigWorkspace
 
     private void WriteEffectiveConfig(ConfigModel config)
     {
-        _console.WriteLine();
-        var table = new Table()
-            .Title("Effective config")
-            .AddColumn("Domain")
-            .AddColumn("Account")
-            .AddColumn("Provider")
-            .AddColumn("Webhook");
+        WithConsole(() =>
+        {
+            _console.WriteLine();
+            var table = new Table()
+                .Title("Effective config")
+                .AddColumn("Domain")
+                .AddColumn("Account")
+                .AddColumn("Provider")
+                .AddColumn("Webhook");
 
-        foreach (var account in config.Accounts)
-        foreach (var record in account.Records)
-            table.AddRow(
-                Markup.Escape(record.Domain),
-                Markup.Escape(account.Name),
-                PromptLabels.ProviderLabel(account.Type),
-                WebhookSource(config, account, record));
+            foreach (var account in config.Accounts)
+            foreach (var record in account.Records)
+                table.AddRow(
+                    Markup.Escape(record.Domain),
+                    Markup.Escape(account.Name),
+                    PromptLabels.ProviderLabel(account.Type),
+                    WebhookSource(config, account, record));
 
-        _console.Write(table);
+            _console.Write(table);
+            PromptToContinue();
+            return true;
+        });
     }
 
     private void WriteValidationErrors(IReadOnlyList<string> errors)
     {
-        var table = new Table()
-            .Title("Imported config is invalid")
-            .AddColumn("Error");
+        _tui.Suspend();
+        try
+        {
+            var table = new Table()
+                .Title("Imported config is invalid")
+                .AddColumn("Error");
 
-        foreach (var error in errors) table.AddRow(Markup.Escape(error));
+            foreach (var error in errors) table.AddRow(Markup.Escape(error));
 
-        _console.Write(table);
+            _console.Write(table);
+        }
+        finally
+        {
+            _tui.Resume();
+        }
     }
 
     private string PromptProviderType()
     {
-        return _console.Prompt(
-            new SelectionPrompt<string>()
-                .Title("Provider")
-                .AddChoices(ProviderTypes.All)
-                .UseConverter(PromptLabels.ProviderLabel));
+        var choices = ProviderTypes.All
+            .Select(type => new MenuChoice<string>(
+                type,
+                PromptLabels.ProviderLabel(type),
+                type == ProviderTypes.Cloudflare ? "API token + zone records" : "API key, v1 or v2"))
+            .ToList();
+
+        return Choose("Provider", choices, isRoot: false, out var type) ? type : ProviderTypes.Mittwald;
     }
 
     private int? PromptApiVersionOverride(string title)
     {
-        var selected = _console.Prompt(
-            new SelectionPrompt<ApiVersionChoice>()
-                .Title(title)
-                .AddChoices(
-                    ApiVersionChoice.GlobalDefault,
-                    ApiVersionChoice.V1,
-                    ApiVersionChoice.V2)
-                .UseConverter(PromptLabels.ApiVersionLabel));
+        var choices = new List<MenuChoice<ApiVersionChoice>>
+        {
+            new(ApiVersionChoice.GlobalDefault, PromptLabels.ApiVersionLabel(ApiVersionChoice.GlobalDefault)),
+            new(ApiVersionChoice.V1, PromptLabels.ApiVersionLabel(ApiVersionChoice.V1)),
+            new(ApiVersionChoice.V2, PromptLabels.ApiVersionLabel(ApiVersionChoice.V2))
+        };
+
+        if (!Choose(title, choices, isRoot: false, out var selected)) return null;
 
         return selected switch
         {
@@ -786,16 +881,16 @@ public sealed class ConfigWorkspace
 
     private int PromptApiVersionValue(string prompt)
     {
-        return _console.Prompt(
+        return WithConsole(() => _console.Prompt(
             new TextPrompt<int>(prompt)
-                .Validate(PromptValidators.ApiVersion));
+                .Validate(PromptValidators.ApiVersion)));
     }
 
     private TimeSpan PromptTimeSpan(string prompt)
     {
-        var input = _console.Prompt(
+        var input = WithConsole(() => _console.Prompt(
             new TextPrompt<string>(prompt)
-                .Validate(PromptValidators.Interval));
+                .Validate(PromptValidators.Interval)));
 
         PromptValidators.TryParseTimeSpan(input, out var timeSpan);
         return timeSpan;
@@ -803,44 +898,149 @@ public sealed class ConfigWorkspace
 
     private string PromptRequired(string prompt)
     {
-        return _console.Prompt(
+        return WithConsole(() => _console.Prompt(
             new TextPrompt<string>(prompt)
-                .Validate(PromptValidators.Required));
+                .Validate(PromptValidators.Required)));
     }
 
     private string PromptOptional(string prompt)
     {
-        return _console.Prompt(new TextPrompt<string>(prompt).AllowEmpty());
+        return WithConsole(() => _console.Prompt(new TextPrompt<string>(prompt).AllowEmpty()));
     }
 
     private string PromptOptionalUrl(string prompt)
     {
-        return _console.Prompt(
+        return WithConsole(() => _console.Prompt(
             new TextPrompt<string>(prompt)
                 .AllowEmpty()
-                .Validate(PromptValidators.OptionalUrl));
+                .Validate(PromptValidators.OptionalUrl)));
     }
 
     private string PromptSecret(string prompt)
     {
-        return _console.Prompt(
+        return WithConsole(() => _console.Prompt(
             new TextPrompt<string>(prompt)
                 .Secret()
-                .Validate(PromptValidators.Required));
+                .Validate(PromptValidators.Required)));
     }
 
     private ConfigRecord PromptRecord(IReadOnlyList<ConfigRecord> records, string title)
     {
-        return _console.Prompt(
-            new SelectionPrompt<ConfigRecord>()
-                .Title(title)
-                .AddChoices(records)
-                .UseConverter(record => Markup.Escape(record.Domain)));
+        var choices = records
+            .Select(record => new MenuChoice<ConfigRecord>(
+                record,
+                record.Domain,
+                string.IsNullOrWhiteSpace(record.ZoneId) ? null : $"zone {record.ZoneId}"))
+            .ToList();
+
+        if (Choose(title, choices, isRoot: false, out var selected)) return selected;
+
+        return records[0];
     }
 
     private void PromptToContinue()
     {
-        _console.Prompt(new TextPrompt<string>("Press enter to continue.").AllowEmpty());
+        WithConsole(() => _console.Prompt(new TextPrompt<string>("Press enter to continue.").AllowEmpty()));
+    }
+
+    // ── TUI / fallback plumbing ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Single-select menu. Uses the LSAC-style TUI when a terminal is available
+    /// and falls back to Spectre.Console prompts otherwise.
+    /// </summary>
+    private bool Choose<T>(string title, IReadOnlyList<MenuChoice<T>> choices, bool isRoot, out T value)
+    {
+        if (_tui.Enabled)
+        {
+            var items = choices.Select(choice => choice.ToItem()).ToList();
+            var index = _tui.Select(title, items, isRoot);
+            if (index is null)
+            {
+                value = default!;
+                return false;
+            }
+
+            value = choices[index.Value].Value;
+            return true;
+        }
+
+        if (choices.Count == 0)
+        {
+            value = default!;
+            return false;
+        }
+
+        _console.WriteLine();
+        value = WithConsole(() => _console.Prompt(
+            new SelectionPrompt<MenuChoice<T>>()
+                .Title(title)
+                .PageSize(15)
+                .AddChoices(choices)).Value);
+        return true;
+    }
+
+    /// <summary>Multi-select menu with the same TUI/fallback split as <see cref="Choose{T}"/>.</summary>
+    private IReadOnlyList<T>? ChooseMany<T>(
+        string title,
+        IReadOnlyList<MenuChoice<T>> choices,
+        IReadOnlyCollection<T> preselected)
+    {
+        if (_tui.Enabled)
+        {
+            var items = choices.Select(choice => choice.ToItem()).ToList();
+            var preselectedIndices = new List<int>();
+            for (var i = 0; i < choices.Count; i++)
+                if (preselected.Contains(choices[i].Value))
+                    preselectedIndices.Add(i);
+
+            var indices = _tui.SelectMany(title, items, preselectedIndices);
+            return indices?.Select(index => choices[index].Value).ToList();
+        }
+
+        var prompt = new MultiSelectionPrompt<MenuChoice<T>>()
+            .Title(title)
+            .NotRequired()
+            .InstructionsText("[grey](Press space to toggle, enter to accept)[/]")
+            .AddChoices(choices);
+
+        foreach (var choice in choices)
+            if (preselected.Contains(choice.Value))
+                prompt.Select(choice);
+
+        return WithConsole(() => _console.Prompt(prompt).Select(choice => choice.Value).ToList());
+    }
+
+    private bool Confirm(string prompt)
+    {
+        return WithConsole(() => _console.Confirm(prompt, false));
+    }
+
+    private T WithConsole<T>(Func<T> action)
+    {
+        _tui.Suspend();
+        try
+        {
+            return action();
+        }
+        finally
+        {
+            _tui.Resume();
+        }
+    }
+
+    private void Notify(string message, bool error = false)
+    {
+        if (_tui.IsActive)
+        {
+            _tui.Alert(message, error);
+            return;
+        }
+
+        if (error)
+            _console.MarkupLine($"[red]{Markup.Escape(message)}[/]");
+        else
+            _console.MarkupLine(Markup.Escape(message));
     }
 
     private static string WebhookSource(ConfigModel config, ConfigAccount account, ConfigRecord record)

@@ -1,13 +1,5 @@
 namespace Ddns.Cli.Interactive;
 
-public sealed record MenuOption<T>(T Value, string Label)
-{
-    public override string ToString()
-    {
-        return Label;
-    }
-}
-
 public enum MainMenuAction
 {
     AddAccount,
