@@ -1,0 +1,16 @@
+# build output
+bin/
+obj/
+/packages/
+
+# ide
+.vs/
+.idea/
+*.user
+*.suo
+/_ReSharper.Caches/
+
+# runtime
+dist/
+config/
+.env

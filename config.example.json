@@ -1,0 +1,37 @@
+{
+  "global_webhook": "",
+  "default_api_version": 2,
+  "timeout": "00:05:00",
+  "ip_service_url": "https://api64.ipify.org",
+  "notify_on_change": true,
+  "notify_on_error": true,
+  "accounts": [
+    {
+      "type": "mittwald",
+      "name": "r1234",
+      "api_key": "REPLACE_WITH_MITTWALD_API_KEY",
+      "api_version": 1,
+      "webhook": null,
+      "records": [
+        {
+          "domain": "example.com",
+          "zone_id": "12345"
+        }
+      ]
+    },
+    {
+      "type": "cloudflare",
+      "name": "cf-main",
+      "api_key": "REPLACE_WITH_CLOUDFLARE_API_TOKEN",
+      "records": [
+        {
+          "domain": "home.example.com",
+          "zone_id": "REPLACE_WITH_ZONE_ID",
+          "record_id": "REPLACE_WITH_RECORD_ID",
+          "proxied": false,
+          "ttl": 1
+        }
+      ]
+    }
+  ]
+}

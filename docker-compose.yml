@@ -1,0 +1,14 @@
+services:
+  ddns:
+    image: ghcr.io/hatsuraide/ddns:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    #user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      DDNS_CONFIG_PATH: /config/ddns.json
+      DDNS_SECRET: ${DDNS_SECRET:-}
+      DDNS_IP_SERVICE_URL: ${DDNS_IP_SERVICE_URL:-}
+    volumes:
+      - ./config:/config
